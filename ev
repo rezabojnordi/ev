@@ -1,0 +1,1280 @@
+#!/usr/bin/env bash
+
+# @virt @virsh @ssh
+# EasyVirt
+# Copyright (c) 2019 Morteza Fakhraee
+# echo -e 'ld\nlp\nln\ni'|ev
+
+# vars
+VERSION='2'
+EVD='/ev'
+HOST="$(hostname)"
+URI='qemu:///session'
+VIRTINST='/usr/bin/virt-install'
+VIRSH='/usr/bin/virsh --quiet'
+VXML='/usr/bin/virt-xml --quiet'
+VIRTBUILDER='/usr/bin/virt-builder'
+
+
+first_run() {
+  echo "$ps>"
+  cat << EOL
+===================================================
+ ____    __    ___  _  _    _  _  ____  ____  ____
+( ___)  /__\  / __)( \/ )  ( \/ )(_  _)(  _ \(_  _)
+ )__)  /(__)\ \__ \ \  /    \  /  _)(_  )   /  )(
+(____)(__)(__)(___/ (__)     \/  (____)(_)\_) (__)
+===================================================
+EOL
+  echo -e " version: $VERSION\n"
+  info_host
+}
+
+
+main() {
+  # trap ctrl-c
+  count=0
+  #trap finish SIGINT
+
+  ps="${HOST}/${URI#qemu:///}/${doing}/${do_name}"
+  first_run
+  while IFS="" read -r -e -p $"$ps> "; do
+    #history -n /tmp/.ev_history
+    history -s "${REPLY}" 2>&1
+    input=($REPLY)
+
+    case "${input}" in
+      'q'|'quit'|'exit')
+        break
+        ;;
+      'v')
+        set -x
+        ;;
+      'u')
+        URI='qemu:///system'
+        ;;
+      'U')
+        URI='qemu:///session'
+        ;;
+      'use'|'cd')
+        use_what "${input[1]}"
+        ;;
+      'l'|'ls'|'list')
+        list_what "${input[1]}"
+        ;;
+      'i'|'info')
+        info_what "${input[1]}"
+        ;;
+      'lp')
+        list_pools "${input[1]}"
+        ;;
+      'ln')
+        list_networks "${input[1]}"
+        ;;
+      'ld')
+        list_domains
+        ;;
+      'lb')
+        list_domain_volumes
+        ;;
+      'lf')
+        list_domain_interfaces
+        ;;
+      'lt')
+        list_domain_snapshots
+        ;;
+      'e'|'edit')
+        edit_what
+        ;;
+      'touch')
+        vol_touch "${input[1]}" "${input[2]}" "${input[3]}"
+        ;;
+      'rm')
+        vol_rm "${input[1]}"
+        ;;
+      'init')
+        init_what "${input[1]}"
+        ;;
+      'mv')
+        move_domain "${input[1]}" "${input[2]}"
+        ;;
+      'set')
+        set_kv "${input[1]}" "${input[2]}" "${input[3]}"
+        ;;
+      'unset')
+        unset_kv "${input[1]}" "${input[2]}"
+        ;;
+      'up'|'on'|'start')
+        up
+        ;;
+      'down'|'off'|'stop')
+        down
+        ;;
+      'less')
+        less_console
+        ;;
+      'term')
+        term_what "${input[1]}"
+        ;;
+      'cut')
+        vol_part_format "${input[1]}" "${input[2]}"
+        ;;
+      'fill')
+        vol_fill "${input[1]}" "${input[2]}" "${input[3]}" "${input[4]}" \
+                 "${input[5]}" "${input[6]}" "${input[7]}"
+        ;;
+      'target')
+        target_what "${input[1]}" "${input[2]}" "${input[3]}" "${input[4]}" \
+                    "${input[5]}" "${input[6]}"
+        ;;
+      'st')
+        snapshot_take "${input[1]}"
+        ;;
+      'sr')
+        snapshot_remove "${input[1]}"
+        ;;
+      'cow')
+        vol_raw_to_qcow "${input[1]}"
+        ;;
+      :*)
+        [[ -z "${input[@]#:}" ]] && declare -F | awk '{print $3}' || \
+        "${input[@]#:}"
+        ;;
+      /*)
+        ${VIRSH} -c ${URI} "${input[@]#/}"
+        ;;
+      !*)
+        cmd="${input[@]#!}"
+        [[ -z "${cmd}" ]] && cmd="cd ${EVD}; bash"
+        /usr/bin/env bash -c "${cmd}"
+        ;;
+      '')
+        set +x
+        ;;
+      \#*)
+        ;;
+      *|'h'|'help')
+        usage "${input[1]}"
+        ;;
+    esac
+    ps="${HOST}/${URI#qemu:///}/${doing}/${do_name}"
+
+  done
+  history -a /tmp/.ev_history
+}
+
+
+usage() {
+  local -A usages=(
+    [h | help]='this help'
+    [q | quit | exit]='quit'
+    [v]='verbose on. enter to disable'
+    [u | U]='system | session'
+    [l | ls | list]="on | off\n  lists domains/pools/blocks based on where you are"
+    [ld]='list domains'
+    [lp]='list pools'
+    [ln]='list networks'
+    [lb]='list blocks'
+    [lf]='list interfaces'
+    [lt]='list snapshots'
+    [edit]='edit xml'
+    [use | cd]="doing/do_name | domain\n  doing: domain/pool to work on it"
+    [i | info]='info'
+    [init]='initialize'
+    [mv]='rename domain'
+    [set]="edit/add options\n  key val1 val2"
+    [unset]='disk | iso val  remove'
+    [up | on | start]='start a pool or network or a domain'
+    [down | off | stop]='stop a pool or network or a domain'
+    [less]='console'
+    [term]='terminate'
+    [touch]="make volume\n  touch NAME size=[G|M] format=[raw|qcow2]\n  default: size=10G format=qcow2"
+    [rm]='remove volume'
+    [cut]="slice disk\n  path must come first\n  cut vol dev=\n  default: dev=/dev/loop0"
+    [fill]="fill empty cutted disk\n  fill vol dev= target= hostname= username= provision= os=\n  default: dev=/dev/loop0  hostname=ev username=ev provision=no os=debian"
+    [target]="make targets\n  type name= arch= release= mirror="
+    [st]="make snapshots\n  st [name]"
+    [2q]="convert raw to qcow2"
+    [:FUNC]='exec one of the underlying functions directly. empty to list them'
+    [/VIRSH_CMD]='exec virsh commands directly. empty to enter virsh shell'
+    [!COMMAND]='exec shell commands directly. empty to enter bash shell'
+  )
+
+  [[ -z "${1}" ]] && for k in "${!usages[@]}"; do
+    echo -e "[$k]\n  ${usages[$k]}\n"
+  done || echo -e "[$1]\n  ${usages[$1]}\n"
+}
+
+
+check_is_what() {
+  check_doing=${1}
+  if [[ ${doing} = ${check_doing} ]]; then
+    return 0
+  else
+    echo "must be in ${check_doing} space"
+    return 1
+  fi
+}
+
+
+get_keyvals() {
+  for keyval in "${@}"; do
+    [[ "${keyval}" =~ '=' ]] && export "${FUNCNAME[1]}_${keyval}"
+  done
+}
+
+
+show_captcha() {
+  local captcha=$(shuf -i 10-99 -n 1)
+  read -p "$(echo -e "${captcha}\n\b")"
+  [[ "${REPLY}" = ${captcha} ]] && return 0 || return 1
+}
+
+
+finish() {
+  clear
+  printf "$ps> "
+}
+
+
+use_what() {
+  case "${1}" in
+    ..)
+      keep_doing="${doing}"
+      keep_do_name="${do_name}"
+      do_name=''
+      ;;
+    -)
+      if [[ "${doing}" = "${keep_doing}" ]] && \
+         [[ "${do_name}" = "${keep_do_name}" ]]; then
+        doing="${keeep_doing}"
+        do_name="${keeep_do_name}"
+      else
+        # multiple cd -
+        keeep_doing="${doing}"
+        keeep_do_name="${do_name}"
+        doing="${keep_doing}"
+        do_name="${keep_do_name}"
+      fi
+      ;;
+    *)
+      a="${1%/*}"
+      z="${1#*/}"
+      [[ "${a}" = "d" ]] && a='domain'
+      [[ "${a}" = "p" ]] && a='pool'
+      [[ "${a}" = "n" ]] && a='network'
+      [[ ${a} = ${z} ]] && z=''
+      keep_doing="${doing}"
+      keep_do_name="${do_name}"
+      doing="${a}"
+      do_name="${z}"
+      # no / will be treated as domain name
+      if [[ "${a}" ]] && \
+         [[ -z "${z}" ]] && \
+         [[ "${a}" != 'domain' ]] && \
+         [[ "${a}" != 'pool' ]] && \
+         [[ "${a}" != 'network' ]]; then
+          doing='domain' && do_name="${a}"
+      fi
+
+      # check malformed path
+      if [[ "${doing}" != 'domain' ]] && \
+         [[ "${doing}" != 'pool' ]] && \
+         [[ "${doing}" != 'network' ]] && \
+         [[ "${doing}" != '' ]]; then
+        echo 'malformed' && doing="${keep_doing}" && do_name="${keep_do_name}"
+      fi
+      ;;
+  esac
+}
+
+
+info_what() {
+  case "${doing}" in
+    'pool')
+      if [[ -z "${do_name}" ]]; then
+        echo 'no pool name' && return
+      elif [[ -z "${1}" ]]; then
+        info_pool "${do_name}"
+      else
+        info_volume "${1}"
+      fi
+      ;;
+    'network')
+      info_network
+      ;;
+    'domain')
+      info_domain
+      ;;
+    '')
+      info_host
+      ;;
+  esac
+}
+
+
+info_host() {
+  cat << EOL
+ ev dir: ${EVD}
+ host: $(hostname -f)
+ address: $(hostname -I)
+ cpu: $(grep -c 'processor' /proc/cpuinfo)
+ mem: $(free -h | awk '/^Mem:/{print $7,"/",$2}')
+ virsh: $(which virsh || echo 'install libvirt-clients')
+ virt-xml: $(which virt-xml || echo 'install virtinst')
+ virt-builder: $(which virt-builder || echo 'install libguestfs-tools')
+ virt-resize: $(which virt-resize || echo 'install libguestfs-tools')
+ debootstrap: $(which debootstrap || echo 'sudo or install debootstrap')
+ yum: $(which yum || echo 'sudo or install yum')
+ parted: $(which parted || echo 'sudo or install parted')
+EOL
+}
+
+
+info_pool() {
+  printf 'Path:\t\t'
+  ${VIRSH} -c ${URI} pool-dumpxml ${do_name} | awk -F'[<>]' '/path/ {print $3}'
+  ${VIRSH} -c ${URI} pool-info "${do_name}"
+}
+
+
+info_volume() {
+  ${VIRSH} -c ${URI} vol-info "${1}" --pool "${do_name}"
+}
+
+
+info_network() {
+  ${VIRSH} -c ${URI} net-info "${do_name}"
+}
+
+
+info_domain() {
+  ${VIRSH} -c ${URI} "\
+    dominfo ${do_name}; \
+    domifaddr ${do_name}; \
+    domdisplay ${do_name} \
+  "
+  echo
+}
+
+
+list_what() {
+  case "${doing}" in
+    'pool')
+      if [[ "${do_name}" ]]; then
+        list_volumes "${1}"
+        return
+      fi
+      list_pools
+      ;;
+    'network')
+      list_networks
+      ;;
+    *|'domain')
+      [[ "${do_name}" ]] && list_domain_stuff || list_domains "${1}"
+      ;;
+  esac
+}
+
+
+# lp
+list_pools() {
+  LP='${VIRSH} -c ${URI} pool-list ${opts}'
+  case "${1}" in
+    -1)
+      opts='--name --all'
+      eval $LP
+      ;;
+    on)
+      opts='--details'
+      eval $LP
+      ;;
+    off)
+      opts='--details --inactive'
+      eval $LP
+      ;;
+    '')
+      opts='--details --all'
+      eval $LP
+      ;;
+  esac
+}
+
+
+# ln
+list_networks() {
+  LN='${VIRSH} -c ${URI} net-list ${opts}'
+  case "${1}" in
+    -1)
+      opts='--name --all'
+      eval $LN
+      ;;
+    on)
+      opts=''
+      eval $LN
+      ;;
+    off)
+      opts='--inactive'
+      eval $LN
+      ;;
+    '')
+      opts='--all'
+      eval $LN
+      ;;
+  esac
+}
+
+
+list_volumes() {
+  ${VIRSH} -c ${URI} vol-list --pool ${do_name} --details
+}
+
+
+# ld
+list_domains() {
+  case "${1}" in
+    -1)
+      ${VIRSH} -c ${URI} list --name --all
+      return
+      ;;
+    on)
+      all_or='state-running'
+      ;;
+    off)
+      all_or='state-shutoff'
+      ;;
+    '')
+      all_or='all'
+      ;;
+    *)
+      echo 'on|off'
+      return
+      ;;
+  esac
+  ${VIRSH} -c ${URI} list --${all_or}
+}
+
+
+list_domain_stuff() {
+  echo 'blocks:' && list_domain_volumes
+  echo 'interfaces:' && list_domain_interfaces
+  echo 'snapshots:' && list_domain_snapshots
+}
+
+
+# lb
+list_domain_volumes() {
+  LB='${VIRSH} -c ${URI} domblklist --details --domain ${do_name}'
+  if [[ "${doing}" != 'domain' ]]; then
+    for dom in $(list_domains -1); do
+      do_name="${dom}"
+      echo "${do_name}:"
+      eval $LB
+      do_name=''
+    done
+  else
+    eval $LB
+  fi
+}
+
+
+# lf
+list_domain_interfaces() {
+  LF='${VIRSH} -c ${URI} domiflist --domain ${do_name}'
+  if [[ "${doing}" != 'domain' ]]; then
+    for dom in $(list_domains -1); do
+      do_name="${dom}"
+      echo "${do_name}:"
+      eval $LF
+      do_name=''
+    done
+  else
+    eval $LF
+  fi
+}
+
+
+# lt
+list_domain_snapshots() {
+  LT='${VIRSH} -c ${URI} snapshot-list --domain ${do_name}'
+  if [[ "${doing}" != 'domain' ]]; then
+    for dom in $(list_domains -1); do
+      do_name="${dom}"
+      echo "${do_name}:"
+      eval $LT
+      do_name=''
+    done
+  else
+    eval $LT
+  fi
+}
+
+
+edit_what() {
+  case "${doing}" in
+    'pool')
+      ${VIRSH} -c ${URI} pool-edit ${do_name}
+      ;;
+    'domain')
+      ${VIRSH} -c ${URI} edit ${do_name}
+      ;;
+    'network')
+      ${VIRSH} -c ${URI} net-edit ${do_name}
+      ;;
+  esac
+
+}
+
+
+init_what() {
+  case "${doing}" in
+    'pool')
+      init_pool "${@}"
+      ;;
+    'domain')
+      init_domain "${@}"
+      ;;
+    'network')
+      init_network "${@}"
+      ;;
+  esac
+}
+
+
+init_pool() {
+  [[ "${doing}" != 'pool' ]] && return
+  [[ -z "${1}" ]] && target="${EVD}/domain/${do_name}" || target="${1}"
+  mkdir -p "${target}" || return
+  ${VIRSH} -c ${URI} "\
+    pool-define-as --name "${do_name}" --type dir --target "${target}"; \
+    pool-autostart "${do_name}"; \
+    pool-start "${do_name}" \
+  " || return
+  echo "${target}"
+}
+
+
+init_network() {
+  [[ "${doing}" != 'network' ]] && return
+  [[ -z "${1}" ]] && echo 'no bridge name specified' && return
+  br_name="${1}"
+  temp_define_xml="$(mktemp)"
+  echo -e "\
+    <network><name>${do_name}</name><forward mode='bridge'/>\
+    <bridge name=${br_name}/><virtualport type='openvswitch'/></network>
+  " > "${temp_define_xml}"
+  ${VIRSH} -c ${URI} net-define "${temp_define_xml}" && \
+  rm -f "${temp_define_xml}"
+}
+
+
+init_domain() {
+  temp_define_xml="$(mktemp)"
+  ${VIRTINST} --print-xml --connect $URI --import --virt-type kvm --cpu host \
+              --graphics vnc --memory 128 --name "${do_name}" --network none \
+              --disk "${1}" > "${temp_define_xml}" && \
+  ${VIRSH} -c ${URI} define --file "${temp_define_xml}" && \
+  ${VXML} -c ${URI} ${do_name} --remove-device --input tablet && \
+  rm -f "${temp_define_xml}" && \
+  echo -e "Domain ${do_name} initiated\n"
+}
+
+
+move_domain() {
+  new_name="${1}"
+  move_domain_pool='no'
+  [[ -z "${new_name}" ]] && usage 'mv' && return
+  check_is_what 'domain'
+  [[ $? = 0 ]] || return
+  get_keyvals "${@}"
+
+  ${VIRSH} -c ${URI} domrename --domain ${do_name} --new-name "${new_name}" || \
+  return
+  if [[ "${move_domain_pool}" = 'yes' ]]; then
+    use_what pool/"${new_name}"
+    new_pool_path=$(init_pool)
+    old_domain_volume=$(${VIRSH} -c ${URI} domblklist --domain "${do_name}" | \
+    awk '{print $2}')
+    new_domain_volume="${new_pool_path}/${new_name}.${old_domain_volume##*.}"
+    mv "${old_domain_volume}" "${new_domain_volume}"
+    use_what domain/"${new_name}"
+    unset_kv disk
+    set_kv disk "${new_domain_volume}"
+  fi
+}
+
+
+set_kv() {
+  key="${1}"
+  val1="${2}"
+  val2="${3}"
+  case "${key}" in
+    'cpu')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      ${VXML} -c ${URI} ${do_name} --edit \
+      --vcpus vcpus="${val1}",maxvcpus="${val2}"
+      ;;
+    'memory')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      ${VXML} -c ${URI} ${do_name} --edit \
+      --memory memory="${val1}",maxmemory="${val2}"
+      ;;
+    'disk')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      ${VXML} -c ${URI} ${do_name} \
+      --add-device --disk "${val1}",bus=virtio
+      ;;
+    'iso')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      ${VXML} -c ${URI} ${do_name} \
+      --add-device --disk "${val1}",bus=ide,format=raw,readonly=true,device=cdrom
+      # make it bootable
+      ;;
+    'nic')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      case ${val1} in
+      'nat')
+        ${VXML} -c ${URI} ${do_name} \
+        --add-device --network type=network,source="${val2}",model=virtio
+        ;;
+      'bridge')
+        ${VXML} -c ${URI} ${do_name} \
+        --add-device --network type=bridge,source="${val2}",model=virtio
+        ;;
+      'ovs')
+        ${VXML} -c ${URI} ${do_name} \
+        --add-device --network type=bridge,source="${val2}",virtualport_type=openvswitch,model=virtio,driver_name=vhost
+        ;;
+      '')
+        echo 'nat | bridge | ovs'
+        ;;
+      esac
+      ;;
+    'boot')
+      check_is_what 'domain'
+      [[ $? = 0 ]] || return
+      [[ ${val1} = 'disk' ]] && val1='hd'
+      ${VXML} -c ${URI} ${do_name} --edit --boot ${val1}
+      ;;
+    'path')
+      check_is_what 'pool'
+      [[ $? = 0 ]] || return
+      ${VIRSH} -c ${URI} pool-edit --pool ${do_name} && down && up
+      ;;
+    'auto')
+      case ${doing} in
+        'domain')
+          case "${val1}" in
+            'on')
+              ${VIRSH} -c ${URI} autostart --domain ${do_name}
+              ;;
+            'off')
+              ${VIRSH} -c ${URI} autostart --domain ${do_name} --disable
+              ;;
+            *)
+              echo 'set auto on | off'
+              ;;
+          esac
+          ;;
+        'pool')
+          case "${val1}" in
+            'on')
+              ${VIRSH} -c ${URI} pool-autostart --pool ${do_name}
+              ;;
+            'off')
+              ${VIRSH} -c ${URI} pool-autostart --pool ${do_name} --disable
+              ;;
+            *)
+              echo 'set auto on | off'
+              ;;
+          esac
+          ;;
+        'network')
+          case "${val1}" in
+            'on')
+              ${VIRSH} -c ${URI} net-autostart --network ${do_name}
+              ;;
+            'off')
+              ${VIRSH} -c ${URI} net-autostart --network ${do_name} --disable
+              ;;
+            *)
+              echo 'set auto on | off'
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+    'ev')
+      check_is_what ''
+      [[ $? = 0 ]] || return
+      [[ "${val1}" =~ '/' ]] || return
+      EVD="${val1}"
+      ;;
+    '')
+      case ${doing} in
+        'domain')
+          echo "set auto [on | off]"
+          echo "set [cpu | memory] min max"
+          echo "set [disk | iso] path"
+          echo "set nic [nat | bridge | ovs] [network_name | bridge_name | ovs bridge_name]"
+          echo -e "set boot [hd | cdrom]\n"
+          ;;
+        'pool')
+          echo -e "set path address\n"
+          ;;
+        '')
+          echo -e "set ev dir"
+          ;;
+      esac
+      ;;
+    *)
+      echo -e "invalid key value: ${key} ${val}\n"
+      ;;
+  esac
+}
+
+
+unset_kv() {
+  key="${1}"
+  val="${2}"
+  case "${key}" in
+    'disk'|'iso')
+      ${VXML} -c ${URI} ${do_name} --remove-device --disk "${val}"
+      ;;
+    'nic')
+      ${VXML} -c ${URI} ${do_name} --remove-device --network mac="52:54:00:${val}"
+      ;;
+    ''|*)
+      echo "invalid key value: ${key} ${val}"
+      echo "unset disk | iso | nic"
+  esac
+}
+
+
+vol_touch() {
+  if [[ -z "${1}" ]] || [[ "${1}" =~ '=' ]]; then
+    usage 'touch'
+    return
+  fi
+  vol_touch_name=${1}
+  vol_touch_size='10G'
+  vol_touch_format='qcow2'
+  get_keyvals "${@}"
+  ${VIRSH} -c ${URI} vol-create-as \
+                       --pool "${do_name}" \
+                       --name $vol_touch_name.$vol_touch_format \
+                       --capacity $vol_touch_size \
+                       --format $vol_touch_format
+  echo "$vol_touch_name.$vol_touch_format"
+}
+
+
+vol_rm() {
+  local vol_rm_vol="${1}"
+  [[ -z "${vol_rm_vol}" ]] && echo 'rm NAME' && return
+  show_captcha && \
+  ${VIRSH} -c ${URI} vol-delete --pool "${do_name}" --vol "${vol_rm_vol}" || \
+  return
+  echo "${vol_rm_vol} removed"
+}
+
+
+vol_to_file() {
+  ${VIRSH} -c ${URI} vol-path --pool ${do_name} --vol ${1} || return
+}
+
+
+vol_file_to_dev() {
+  check_is_what 'pool'
+  [[ $? = 0 ]] || return
+
+  local vol_file_to_dev_vol="${1}"
+  local vol_file_to_dev_dev="${2}"
+  local vol_file_to_dev_file="$(vol_to_file ${vol_file_to_dev_vol})"
+  local vol_file_to_dev_format="$(qemu-img info $vol_file_to_dev_file | \
+                                  awk -F': ' '/file format/ {print $2}'
+                                 )"
+  case "${vol_file_to_dev_format}" in
+    'qcow2')
+      [[ -z "${vol_file_to_dev_dev}" ]] && vol_file_to_dev_dev='/dev/nbd0'
+      modprobe nbd max_port=8
+      local vol_file_to_dev_cmd='qemu-nbd -c'
+      ;;
+    'raw')
+      [[ -z "${vol_file_to_dev_dev}" ]] && vol_file_to_dev_dev='/dev/loop0'
+      local vol_file_to_dev_cmd='losetup'
+      ;;
+    *)
+      echo 'unknown volume format'
+      return
+      ;;
+  esac
+
+  ${vol_file_to_dev_cmd} "${vol_file_to_dev_dev}" "${vol_file_to_dev_file}" || \
+  return
+  echo "${vol_file_to_dev_dev}"
+}
+
+
+vol_part_format() {
+  check_is_what 'pool'
+  [[ $? = 0 ]] || return
+
+  if [[ -z "${1}" ]] || [[ "${1}" =~ '=' ]]; then
+    usage 'cut'
+    return
+  fi
+
+  get_keyvals "${@}"
+  local vol_part_format_vol="${1}"
+  local vol_part_format_dev="$(vol_file_to_dev ${vol_part_format_vol} \
+                                               ${vol_part_format_dev})"
+  [[ "${vol_part_format_dev}" =~ '/' ]] || return
+  local parted='parted --script'
+
+  echo -e "volume: ${vol_part_format_vol}\ndev: ${vol_part_format_dev}"
+  if ! $(show_captcha); then
+    losetup -d ${vol_part_format_dev} 2> /dev/null || \
+    qemu-nbd -d ${vol_part_format_dev}
+    return
+  fi
+  ${parted} ${vol_part_format_dev} mklabel gpt || return
+  ${parted} ${vol_part_format_dev} mkpart grub 0% 2m || return
+  ${parted} ${vol_part_format_dev} set 1 bios on || return
+  ${parted} ${vol_part_format_dev} mkpart os ext4 2m 100% || return
+  echo 'parted ok'
+
+  partprobe
+  mkfs.ext4 -q ${vol_part_format_dev}p2 || return
+  echo 'mkfs.ext4 ok'
+
+
+  { losetup -d ${vol_part_format_dev} 2> /dev/null || \
+  qemu-nbd -d ${vol_part_format_dev}; } || return
+  echo 'all clean'
+}
+
+
+vol_mount() {
+  true
+}
+
+
+vol_fill() {
+  if [[ -z "${1}" ]] || [[ "${1}" =~ '=' ]]; then
+    usage 'fill'
+    return
+  fi
+  check_is_what 'pool'
+  [[ $? = 0 ]] || return
+
+  local vol_fill_vol="${1}"
+  local vol_fill_dev="$(vol_file_to_dev ${vol_fill_vol} ${vol_fill_dev})"
+  [[ "${vol_fill_dev}" =~ '/' ]] || return
+  local vol_fill_os='debian'
+  local vol_fill_hostname='ev'
+  local vol_fill_username='ev'
+  local vol_fill_provision='no'
+  get_keyvals "${@}"
+  [[ -z "${vol_fill_target}=" ]] && return
+
+  echo -e "volume: ${vol_fill_vol}\ndev: ${vol_fill_dev}"
+  echo -e "base os path: ${vol_fill_target}\nhostname: ${vol_fill_hostname}"
+  echo -e "username: ${vol_fill_username}"
+  if ! $(show_captcha); then
+    losetup -d ${vol_fill_dev} 2> /dev/null || qemu-nbd -d ${vol_fill_dev}
+    return
+  fi
+
+  echo "creating tmp dir"
+  mountp="$(mktemp -d)" || return
+
+  echo "mounting at ${mountp}"
+  mount ${vol_fill_dev}p2 ${mountp} || return
+
+  echo "copying ${vol_fill_target} to ${mountp}"
+  cp -a "${vol_fill_target}"/* "${mountp}"/ &
+
+  local target_size="$(du -sh ${vol_fill_target} | awk '{print $1}')"
+  while [[ -n $(jobs -rp) ]]; do
+    target_current="$(du -sh ${mountp} | awk '{print $1}')"
+    echo -ne ${target_current} / ${target_size}\\r
+    sleep 0.5
+  done
+
+  local uuid=$(blkid -o value -s UUID ${vol_fill_dev}p2)
+  echo -e "UUID=${uuid} /\text4 errors=remount-ro\t0 1" > "${mountp}/etc/fstab"
+
+  prov_file="${mountp}/root/ev-prov"
+  cat <<- EOL > "${prov_file}"
+    main() {
+      base
+      eval \$1
+      system_d
+    }
+
+
+    base() {
+      echo "127.0.0.1 localhost ${vol_fill_hostname}" > /etc/hosts
+      useradd -m "${vol_fill_username}"&&
+      passwd "${vol_fill_username}"
+    }
+
+
+    debian() {
+      usermod -a -G sudo "${vol_fill_username}"
+
+      sed -i '/# en_US.UTF-8/s/^#//g' /etc/locale.gen
+      echo 'LANG=en_US.UTF-8' > /etc/default/locale
+      locale-gen
+      echo ${vol_fill_hostname} > /etc/hostname
+
+
+      DEBIAN_FRONTEND=noninteractive \
+      apt-get -qq --no-install-recommends install grub-pc > /dev/null&&
+      grub-install --target=i386-pc --boot-directory=/boot/ ${vol_fill_dev}&&
+      sed -i '/GRUB_TIMEOUT/s/5/0/g' /etc/default/grub&&
+      sed -i 's/quiet/console=ttyS0/g' /etc/default/grub&&
+      update-grub
+
+      echo -e $'
+        localectl set-locale LANG=en_US.utf8
+        for iface in \
+          \$(for i in \`find /sys/class/net -type l \\! -name lo\`; do
+            echo \${i##*/}
+          done); do
+          echo -e 'auto \$iface\n  iface \$iface inet dhcp'
+        done >> /etc/network/interfaces
+        systemctl disable ev-startup
+        systemctl reboot
+      ' > /root/ev-startup
+    }
+
+
+    centos() {
+      usermod -a -G wheel "${vol_fill_username}"
+      ln -s /run/dbus /var/run
+
+      yum -y -c /ev.repo \
+        --disablerepo=* --enablerepo=base --disableplugin=* \
+        install grub2 grub2-pc openssh-server systemd-sysv rsyslog dhclient \
+        passwd sudo polkit&&
+
+      yum -y -c /ev.repo \
+        --disablerepo=* --enablerepo=base --disableplugin=* \
+        reinstall dbus
+
+      echo -e '
+        GRUB_TIMEOUT=2
+        GRUB_DEFAULT=saved
+        GRUB_DISABLE_SUBMENU=true
+        GRUB_TERMINAL_OUTPUT=console
+        GRUB_DISABLE_RECOVERY=true
+      ' > /etc/default/grub&&
+      grub2-install --target=i386-pc --boot-directory=/boot/ ${vol_fill_dev}&&
+      grub2-mkconfig -o /boot/grub2/grub.cfg
+
+      echo -e '
+        localectl set-locale LANG=en_US.utf8
+        hostnamectl set-hostname "${vol_fill_hostname}"
+        timedatectl set-timezone Asia/Tehran
+        systemctl disable ev-startup
+        systemctl reboot
+      ' > /root/ev-startup
+    }
+
+
+    system_d() {
+      echo -e '
+        Description=ev startup\nType=simple\nBefore=network.target\n
+        [Service]\nExecStart=/bin/bash /root/ev-startup\n
+        [Install]\nWantedBy=default.target
+      ' > /etc/systemd/system/ev-startup.service
+      chmod +x /root/ev-startup
+      systemctl enable ev-startup
+    }
+
+    main "${vol_fill_os}"
+	EOL
+
+  if [[ "${vol_fill_provision}" = 'yes' ]]; then
+    "${EDITOR:-vi}" "${prov_file}"
+  fi
+
+  echo "getting ready to chroot"
+  for i in {dev,proc,sys}; do mount --bind /${i} "${mountp}/$i"; done || return
+  mount --bind /dev/pts ${mountp}/dev/pts
+  ln -sf /proc/mounts "${mountp}"/etc/mtab
+
+  echo "provisioning"
+  chroot "${mountp}" /bin/sh -c 'chmod +x /root/ev-prov && bash /root/ev-prov'
+
+  sync
+  umount ${mountp}/dev/pts
+  for i in {dev,proc,sys}; do umount "${mountp}/$i"; done || return
+  umount ${mountp} && rmdir ${mountp} && \
+  { losetup -d ${vol_fill_dev} 2> /dev/null || \
+  qemu-nbd -d ${vol_fill_dev}; } || return
+  echo 'all clean'
+}
+
+
+vol_raw_to_qcow() {
+  check_is_what 'pool'
+  [[ $? = 0 ]] || return
+
+  local vol_qcow_vol="${1}"
+  local vol_qcow_file="$(vol_to_file ${vol_qcow_vol})"
+  qemu-img convert -f raw -O qcow2 ${vol_qcow_file} ${vol_qcow_file%.*}.qcow2 || return
+  ${VIRSH} -c ${URI} pool-refresh --pool ${do_name}
+}
+
+
+up() {
+  case ${doing} in
+    'pool')
+      ${VIRSH} -c ${URI} pool-start "${do_name}"
+      ;;
+    'network')
+      ${VIRSH} -c ${URI} net-start "${do_name}"
+      ;;
+    'domain')
+      ${VIRSH} -c ${URI} start "${do_name}"
+      ;;
+  esac
+}
+
+
+down() {
+  case ${doing} in
+    'pool')
+      ${VIRSH} -c ${URI} pool-destroy "${do_name}"
+      ;;
+    'network')
+      ${VIRSH} -c ${URI} net-destroy "${do_name}"
+      ;;
+    'domain')
+      ${VIRSH} -c ${URI} destroy "${do_name}"
+      ;;
+  esac
+}
+
+
+less_console() {
+  ${VIRSH} -c ${URI} console "${do_name}"
+}
+
+
+term_what() {
+  case "${doing}" in
+    'pool')
+      if [[ -z "${do_name}" ]]; then
+        echo 'no pool name' && return
+      else
+        term_pool "${1}"
+      fi
+      ;;
+    'domain')
+      term_domain "${1}"
+      ;;
+  esac
+}
+
+
+term_pool() {
+  case "${1}" in
+    '--yes')
+      REPLY='YES'
+      ;;
+    '')
+      echo "terminating pool: ${do_name}"
+      ;;
+  esac
+  if $(show_captcha) || [[ "${REPLY}" = 'YES' ]]; then
+    mv $(
+      ${VIRSH} -c ${URI} pool-dumpxml ${do_name} | \
+      awk -F'[<>]' '/path/ {print $3}'
+    ) ${EVD}/trash
+    ${VIRSH} -c ${URI} "\
+      pool-destroy --pool ${do_name}; \
+      pool-undefine --pool ${do_name} \
+    "
+  fi
+}
+
+
+term_domain() {
+  case "${1}" in
+    '--yes')
+      REPLY='YES'
+      ;;
+    '')
+      echo "domain ${do_name} volumes:"
+      list_domain_volumes "${do_name}"
+      ;;
+  esac
+  if $(show_captcha) || [[ "${REPLY}" = 'YES' ]]; then
+    ${VIRSH} -c ${URI} "\
+      destroy ${do_name}; \
+      undefine --domain ${do_name} \
+    " 2> /dev/null
+  fi
+}
+
+
+target_what() {
+  target_what_type="${1}"
+  case "${target_what_type}" in
+    'debian')
+      target_debian "${@}"
+      ;;
+    'centos')
+      target_centos "${@}"
+      ;;
+    *|'')
+      usage 'target'
+      ls "${EVD}/target"
+      ;;
+  esac
+}
+
+
+target_debian() {
+  get_keyvals "${@}"
+  [[ -z "${target_debian_arch}" ]] && target_debian_arch='amd64'
+  [[ -z "${target_debian_release}" ]] && target_debian_release='buster'
+  [[ -z "${target_debian_name}" ]] && \
+  target_debian_name="
+    debian_${target_debian_release}-${target_debian_arch}
+  "
+  [[ -z "${target_debian_target}" ]] && \
+    target_debian_target="${EVD}/target/${target_debian_name}"
+  [[ -z "${target_debian_mirror}" ]] && \
+  target_debian_mirror='http://192.168.1.96:3142/debian.asis.ai/debian/'
+  debian_base_packages="
+    sudo,openssh-server,linux-image-amd64,htop,vim,screen,git,grc,xtail,less,vim
+    mtr-tiny,locales,lsof,wget,dbus,ca-certificates,xz-utils,unzip,curl
+  "
+
+  debootstrap \
+    --arch=${target_debian_arch} \
+    --components main,contrib,non-free \
+    --include="${debian_base_packages},${target_debian_packages}" \
+    ${target_debian_release} "${target_debian_target}" "${target_debian_mirror}" || \
+  rm -rf "${target_debian_target}"
+}
+
+
+target_centos() {
+  get_keyvals "${@}"
+  target_centos_target="${EVD}/target/${target_centos_name}"
+  target_centos_config="${target_centos_target}/ev.repo"
+  [[ -d "${target_centos_target}" ]] || mkdir "${target_centos_target}"
+  centos_base_packages="
+    yum kernel rootfiles passwd sudo bash vim screen htop git
+  "
+  cat <<- EOL > "${target_centos_config}"
+  [base]
+  name=base
+  baseurl=http://repo-1.partdp.ir/centos/7/os/x86_64
+  gpgcheck=0
+
+  [epel]
+  name=epel
+  baseurl=http://repo-1.partdp.ir/epel/7/x86_64/
+  gpgcheck=0
+
+  #released updates
+  #[updates]
+  #name=updates
+  #baseurl=http://repo-1.partdp.ir/centos/7/updates/x86_64
+  #gpgcheck=0
+  #gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+
+  ##additional packages that may be useful
+  #[extras]
+  #name=extras
+  #baseurl=http://repo-1.partdp.ir/centos/7/extras/x86_64
+  #gpgcheck=0
+  #gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+	EOL
+  awk -i inplace '{$1=$1};1' "${target_centos_config}"
+
+  yum -y -c "${target_centos_config}"  \
+    --disablerepo='*' --enablerepo=base --enablerepo=epel \
+    --disableplugin='*' --releasever=7 \
+    --installroot="${target_centos_target}" install ${centos_base_packages} || \
+  rm -rf "${target_centos_target}"
+}
+
+
+snapshot_take() {
+  check_is_what 'domain'
+  [[ $? = 0 ]] || return
+
+  snapshot_name="${1}"
+  [[ -z "${snapshot_name}" ]] && snapshot_name=$(date +%y%m%d-%H%M)
+  ${VIRSH} -c ${URI} snapshot-create-as \
+    --domain ${do_name} \
+    --name "${snapshot_name}" \
+    --diskspec vda,snapshot=external \
+    --disk-only \
+    --atomic
+}
+
+
+snapshot_remove() {
+  check_is_what 'domain'
+  [[ $? = 0 ]] || return
+
+  snapshot_name="${1}"
+  [[ -z "${snapshot_name}" ]] && echo 'no snapshot name' && return
+  ${VIRSH} -c ${URI} snapshot-delete \
+    --domain ${do_name} \
+    --snapshotname "${snapshot_name}"
+}
+
+
+# extras
+evup() {
+  local pkgs=(
+    atop htop git screen dnsmasq packer parted qemu-utils qemu-kvm
+    libguestfs-tools libvirt-clients libvirt-daemon-system virtinst
+  )
+
+  mkdir -p "${EVD}"/{domain,iso,share,target,trash} && ev_dirs=1
+
+  read -p 'using ovs br? (yes) '
+  if [[ ${REPLY} = 'yes' ]]; then
+    pkgs[-1]+=" openvswitch-switch"
+    cat<< EOL >/tmp/.ovs.xml
+<network>
+  <name>ovs</name>
+  <forward mode='bridge'/>
+  <bridge name='ovs-br'/>
+  <virtualport type='openvswitch'/>
+</network>
+EOL
+  #sudo ovs-vsctl add-br ovs-br && sudo ovs-vsctl add-port ovs-br IF
+  fi
+
+  sudo apt update && sudo apt-get --yes --no-install-recommends install ${pkgs[@]} && \
+  ev_packages=1
+
+
+  ${VIRSH} -c ${URI} net-define /tmp/.ovs.xml
+  #sudo echo "allow br0" >>/etc/qemu/bridge.conf && \
+  #sudo ip address flush br0 scope global && \
+  #sudo setcap 'cap_ne_admin+ep' /usr/lib/qemu/qemu-bridge-helper
+}
+
+
+#bind -x '"\C-r": "source $0"' &> /dev/null
+
+
+main "$@"
