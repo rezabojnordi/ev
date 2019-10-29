@@ -2,6 +2,8 @@
 
 Easy Virt
 
+Moved to https://codeberg.org/fakhraee/ev
+
 ## milestone
 
 * list domain volumes and resize stuff
