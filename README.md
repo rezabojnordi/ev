@@ -2,7 +2,7 @@
 
 Easy Virt
 
-Moved to https://codeberg.org/fakhraee/yvirt
+Moved to https://codeberg.org/thefakhraee/yvirt
 
 ## milestone
 
